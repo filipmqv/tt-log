@@ -1,0 +1,94 @@
+{
+  "jira": {
+    "username": "jira_username",
+    "password": "jira_pass",
+    "assignee_name": "",
+    "project_abbr": "",
+    "status_field": "status",
+    "start_work_status": "In Progress",
+    "stop_work_status_primary": "CODE REVIEW",
+    "stop_work_status_secondary": "QA"
+  },
+  "meetings": {
+    "daily_events": [
+      {
+        "title": "daily",
+        "work_time": 15
+      }
+    ],
+    "sprint": "biweekly",
+    "weekly_events": [
+      {
+        "title": "refinement",
+        "work_time": 60
+      },
+      {
+        "title": "retro",
+        "work_time": 90
+      },
+      {
+        "title": "planning",
+        "work_time": 120
+      },
+      {
+        "title": "anything",
+        "work_time": 45
+      },
+      {
+        "title": "",
+        "work_time": 0
+      }
+    ],
+
+    "biweekly_start_date": "2019-01-14",
+    "biweekly_events": [
+      {
+        "title": "",
+        "work_time": 0
+      },
+      {
+        "title": "",
+        "work_time": 0
+      },
+      {
+        "title": "",
+        "work_time": 0
+      },
+      {
+        "title": "",
+        "work_time": 0
+      },
+      {
+        "title": "friday",
+        "work_time": 0
+      },
+
+      {
+        "title": "",
+        "work_time": 0
+      },
+      {
+        "title": "",
+        "work_time": 0
+      },
+      {
+        "title": "",
+        "work_time": 0
+      },
+      {
+        "title": "",
+        "work_time": 0
+      },
+      {
+        "title": "",
+        "work_time": 0
+      }
+    ]
+  },
+  "teamtracker": {
+    "auth": "Token real_token",
+    "tt_project_id":
+  },
+  "timezone": "Europe/Warsaw",
+  "i_start_work_at": 9
+}
