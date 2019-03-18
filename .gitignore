@@ -1,6 +1,6 @@
 venv
+dist/tt-log-config.json
 tt-log-config.json
 __pycache__
 build
-dist
 tt-log.spec
