@@ -48,7 +48,7 @@ def make_parser():
     arg_parser = ArgumentParser('Log work time to TeamTracker')
 
     arg_parser.add_argument('-w', '--when', dest='date_to_compare', type=str,
-                            help='Provide date for which you want to log work')
+                            help='Provide date for which you want to log work in ISO date format "YYYY-MM-DD"')
     arg_parser.add_argument('-m', '--meeting', dest='additional_meeting',
                             type=str,
                             help='Add additional meeting to your regular meetings. Format: "description:minutes"')
@@ -276,7 +276,7 @@ class JiraTaskProcessor:
             histories, self._config.stop_work_status_secondary)
         histories_to_start = self._histories_moved_to_status(
             histories, self._config.start_work_status)
-        
+
         newest_start_work = self._get_newest_created_datetime(
             histories_to_start)
         newest_stop_work = self._get_newest_created_datetime(
@@ -405,7 +405,7 @@ class TeamTrackerLogger:
 
     TT_URL = 'http://localhost:8080'
     LOG_ENDPOINT = TT_URL + '/api/project_logs/'
-    
+
     def post_log(self, events: List[Event]):
         for event in events:
             if event.work_time > timedelta(seconds=0):
