@@ -1,6 +1,6 @@
 {
   "jira": {
-    "username": "jira_username",
+    "username": "jira_email",
     "password": "jira_pass",
     "assignee_name": "",
     "project_abbr": "",
@@ -16,10 +16,10 @@
         "work_time": 15
       }
     ],
-    "sprint": "biweekly",
+    "sprint": "weekly",
     "weekly_events": [
       {
-        "title": "refinement",
+        "title": "monday",
         "work_time": 60
       },
       {
@@ -43,7 +43,7 @@
     "biweekly_start_date": "2019-01-14",
     "biweekly_events": [
       {
-        "title": "",
+        "title": "monday",
         "work_time": 0
       },
       {
@@ -64,7 +64,7 @@
       },
 
       {
-        "title": "",
+        "title": "monday on second week",
         "work_time": 0
       },
       {
@@ -87,7 +87,7 @@
   },
   "teamtracker": {
     "auth": "Token real_token",
-    "tt_project_id":
+    "tt_project_id": 1
   },
   "timezone": "Europe/Warsaw",
   "i_start_work_at": 9
