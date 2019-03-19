@@ -118,5 +118,6 @@ Setup:
 4. Run the script form the directory that the script resides in (so it can "see" the config file):
  * `python tt-log.py` or
  * (being in `dist` directory) `./tt-log`
+ 
  By default it will log time for present day.
 5. You can inspect optional args by invoking `python tt-log.py --help`
