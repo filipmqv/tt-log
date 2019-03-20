@@ -33,6 +33,7 @@ WORK_TIME = 'work_time'
 TO_STRING = 'toString'
 CREATED = 'created'
 SUMMARY = 'summary'
+NAME = 'name'
 
 MEETINGS = 'meetings'
 DAILY_EVENTS = 'daily_events'
@@ -240,7 +241,7 @@ class JiraTaskGetter(TaskGetter):
         )
         data = r.json()
 
-        # with open('results4.json', 'w') as file:
+        # with open('results-full.json', 'w') as file:
         #     file.write(json.dumps(data))
         #     print('done')
 
@@ -258,12 +259,26 @@ class JiraTaskProcessor:
         data = self._get_issues_for_assigne(data, self._config.assignee_name)
         data = [self._convert_to_event(obj, self._date_to_compare)
                 for obj in data if
-                obj[CHANGELOG] and
-                obj[CHANGELOG][HISTORIES] and
-                self._is_updated_on_date(obj[CHANGELOG][HISTORIES], obj[KEY])]
+                self._has_mandatory_fields(obj) and
+                self._qualifies_for_processing(obj)]
 
         data = [event for event in data if event.work_time]
         return data
+
+    def _has_mandatory_fields(self, obj):
+        return obj[CHANGELOG] and \
+               obj[CHANGELOG][HISTORIES] and \
+               obj[FIELDS] and \
+               obj[FIELDS][self._config.status_field] and \
+               obj[FIELDS][self._config.status_field][NAME]
+
+    def _qualifies_for_processing(self, obj) -> bool:
+        return self._is_updated_on_date(obj[CHANGELOG][HISTORIES], obj[KEY]) \
+               or self._is_in_progress(obj)
+
+    def _is_in_progress(self, obj):
+        return obj[FIELDS][self._config.status_field][NAME] == \
+               self._config.start_work_status
 
     def _convert_to_event(self, issue, date_to_compare):
         histories = issue[CHANGELOG][HISTORIES]
@@ -294,9 +309,11 @@ class JiraTaskProcessor:
             work_time = self._stop_work_timestamp - newest_start_work
         elif newest_stop_work and newest_stop_work.date() == date_to_compare:
             work_time = newest_stop_work - self._start_work_timestamp
+        elif newest_start_work.date() < date_to_compare:
+            work_time = timedelta(hours=2)  # whatever to adjust later
         else:
-            print('Discarded: {} {} {}'.format(key, newest_start_work,
-                                               newest_stop_work))
+            print('Discarded events: {} {} {}'.format(
+                key, newest_start_work, newest_stop_work))
         return Event(work_time=work_time, key=key, title=title,
                      event_type=EventType.TASK)
 
@@ -337,29 +354,42 @@ class JiraTaskProcessor:
         return [obj for obj in data['issues'] if
                 obj[FIELDS] and
                 obj[FIELDS][ASSIGNEE] and
-                obj[FIELDS][ASSIGNEE]['name'] == assignee]
+                obj[FIELDS][ASSIGNEE][NAME] == assignee]
 
 
 class TimeAdjuster:
     def adjust_time(self, tasks: List[Event], meetings: List[Event]):
         workday_hours = timedelta(hours=WORK_HOURS)
-        all_events_time = sum([obj.work_time for obj in meetings], timedelta())
+        all_meetings_time = sum([obj.work_time for obj in meetings], timedelta())
         all_tasks_time = sum([obj.work_time for obj in tasks], timedelta())
         if all_tasks_time == timedelta(seconds=0):
             raise TeamTrackerLoggerError('No tasks to log')
-        tasks_must_be_time = workday_hours - all_events_time
+        tasks_must_be_time = workday_hours - all_meetings_time
         tasks_times = [obj.work_time for obj in tasks]
+        tasks_times = self._calculate_tasks_times(tasks_times, tasks_must_be_time)
+        tasks = self._override_tasks_work_time(tasks, tasks_times)
+        return tasks
+
+    def _calculate_tasks_times(self, tasks_times, tasks_must_be_time):
+        """
+        Calculates proportions of tasks by work time and adjusts work time
+        to be tasks_must_be_time in total. Takes care of rounding.
+        :return:
+        """
         proportions = self._proportions(tasks_times)
-        results = [(tasks_must_be_time * p) for p in proportions]
-        results2 = [self._round_timedelta(r) for r in results]
-        diff_after_rounding = tasks_must_be_time - sum(results2, timedelta())
+        tasks_times = [tasks_must_be_time * p for p in proportions]
+        tasks_times = [self._round_timedelta(r) for r in tasks_times]
+        calculated_tasks_time = sum(tasks_times, timedelta())
+        diff_after_rounding = tasks_must_be_time - calculated_tasks_time
         if diff_after_rounding > timedelta(seconds=0):
-            time_idx = results2.index(min(results2))
+            time_idx = tasks_times.index(min(tasks_times))
         else:
-            time_idx = results2.index(max(results2))
-        results2[time_idx] += diff_after_rounding
-        new_all_tasks_time = sum([obj for obj in results], timedelta())
-        for task, new_work_time in zip(tasks, results2):
+            time_idx = tasks_times.index(max(tasks_times))
+        tasks_times[time_idx] += diff_after_rounding
+        return tasks_times
+
+    def _override_tasks_work_time(self,tasks, tasks_times):
+        for task, new_work_time in zip(tasks, tasks_times):
             task.work_time = new_work_time
         return tasks
 

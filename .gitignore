@@ -1,6 +1,8 @@
+.idea
 venv
 dist/tt-log-config.json
 tt-log-config.json
 __pycache__
 build
 tt-log.spec
+results-full.json
