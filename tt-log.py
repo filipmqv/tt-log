@@ -68,7 +68,8 @@ def validate_args(args):
             title, work_time = args_string.split(":")
             return Event(
                 title=title,
-                work_time=timedelta(minutes=int(work_time))
+                work_time=timedelta(minutes=int(work_time)),
+                event_type=EventType.MEETING,
             )
         except:
             raise TeamTrackerLoggerError(f'Could not parse {args_string}')
@@ -108,7 +109,7 @@ class EventType:
     MEETING = 3
 
 
-@attr.dataclass(repr=False)
+@attr.dataclass(repr=False, frozen=True)
 class Event:
     work_time: timedelta
     key: str = ''
@@ -256,16 +257,22 @@ class JiraTaskProcessor:
     _stop_work_timestamp: datetime
 
     def process_jira_tasks(self, data):
-        data = self._get_issues_for_assigne(data, self._config.assignee_name)
-        data = [self._convert_to_event(obj, self._date_to_compare)
+        data = self._get_tasks_for_assigne(data, self._config.assignee_name)
+        data = [self._process_task(obj, self._date_to_compare)
                 for obj in data if
                 self._has_mandatory_fields(obj) and
                 self._qualifies_for_processing(obj)]
 
-        data = [event for event in data if event.work_time]
+        data = self._remove_duplicates_and_errors(data)
         return data
 
-    def _has_mandatory_fields(self, obj):
+    def _remove_duplicates_and_errors(self, events: List[Event]) -> List[Event]:
+        """
+        Removes duplicates and events with work_time == None
+        """
+        return list(set([event for event in events if event.work_time]))
+
+    def _has_mandatory_fields(self, obj) -> bool:
         return obj[CHANGELOG] and \
                obj[CHANGELOG][HISTORIES] and \
                obj[FIELDS] and \
@@ -273,14 +280,14 @@ class JiraTaskProcessor:
                obj[FIELDS][self._config.status_field][NAME]
 
     def _qualifies_for_processing(self, obj) -> bool:
-        return self._is_updated_on_date(obj[CHANGELOG][HISTORIES], obj[KEY]) \
+        return self._is_updated_on_date(obj[CHANGELOG][HISTORIES]) \
                or self._is_in_progress(obj)
 
     def _is_in_progress(self, obj):
         return obj[FIELDS][self._config.status_field][NAME] == \
                self._config.start_work_status
 
-    def _convert_to_event(self, issue, date_to_compare):
+    def _process_task(self, issue, date_to_compare):
         histories = issue[CHANGELOG][HISTORIES]
         key = issue[KEY]
         title = issue[FIELDS][SUMMARY]
@@ -309,10 +316,17 @@ class JiraTaskProcessor:
             work_time = self._stop_work_timestamp - newest_start_work
         elif newest_stop_work and newest_stop_work.date() == date_to_compare:
             work_time = newest_stop_work - self._start_work_timestamp
-        elif newest_start_work.date() < date_to_compare:
+        elif newest_start_work and \
+                newest_start_work.date() < date_to_compare and \
+                not newest_stop_work:
+            work_time = timedelta(hours=2)  # whatever to adjust later
+        elif newest_start_work and \
+                newest_start_work.date() < date_to_compare and \
+                newest_stop_work and \
+                newest_stop_work.date() > date_to_compare:
             work_time = timedelta(hours=2)  # whatever to adjust later
         else:
-            print('Discarded events: {} {} {}'.format(
+            print('Discarded event: {} {} {}'.format(
                 key, newest_start_work, newest_stop_work))
         return Event(work_time=work_time, key=key, title=title,
                      event_type=EventType.TASK)
@@ -334,7 +348,7 @@ class JiraTaskProcessor:
     def _is_on_date(self, created_timestamp):
         return parser.parse(created_timestamp).date() == self._date_to_compare
 
-    def _is_updated_on_date(self, histories, key):
+    def _is_updated_on_date(self, histories) -> bool:
         histories_to_primary_stop = self._histories_moved_to_status(
             histories, self._config.stop_work_status_primary)
         histories_to_secondary_stop = self._histories_moved_to_status(
@@ -342,15 +356,19 @@ class JiraTaskProcessor:
         histories_to_start = self._histories_moved_to_status(
             histories, self._config.start_work_status)
 
-        histories = [obj for obj in histories_to_secondary_stop if
-                     self._is_on_date(obj[CREATED])] or \
-                    [obj for obj in histories_to_primary_stop if
-                     self._is_on_date(obj[CREATED])] or \
-                    [obj for obj in histories_to_start if
-                     self._is_on_date(obj[CREATED])]
+        histories = self._histories_on_date(histories_to_secondary_stop) or \
+                    self._histories_on_date(histories_to_primary_stop) or \
+                    self._histories_on_date(histories_to_start)
         return bool(histories)
 
-    def _get_issues_for_assigne(self, data, assignee):
+    def _histories_on_date(self, histories):
+        return [obj for obj in histories if self._is_on_date(obj[CREATED])]
+
+    @staticmethod
+    def _get_tasks_for_assigne(data, assignee):
+        """
+        Ensures that only tasks for assignee will be processed
+        """
         return [obj for obj in data['issues'] if
                 obj[FIELDS] and
                 obj[FIELDS][ASSIGNEE] and
@@ -358,23 +376,30 @@ class JiraTaskProcessor:
 
 
 class TimeAdjuster:
-    def adjust_time(self, tasks: List[Event], meetings: List[Event]):
+    def adjust_time(self, tasks: List[Event],
+                    meetings: List[Event]) -> List[Event]:
         workday_hours = timedelta(hours=WORK_HOURS)
-        all_meetings_time = sum([obj.work_time for obj in meetings], timedelta())
+        all_meetings_time = sum([obj.work_time for obj in meetings],
+                                timedelta())
         all_tasks_time = sum([obj.work_time for obj in tasks], timedelta())
         if all_tasks_time == timedelta(seconds=0):
             raise TeamTrackerLoggerError('No tasks to log')
         tasks_must_be_time = workday_hours - all_meetings_time
         tasks_times = [obj.work_time for obj in tasks]
-        tasks_times = self._calculate_tasks_times(tasks_times, tasks_must_be_time)
-        tasks = self._override_tasks_work_time(tasks, tasks_times)
+        tasks_times = self._calculate_tasks_times(tasks_times,
+                                                  tasks_must_be_time)
+        tasks = self._apply_new_work_time(tasks, tasks_times)
         return tasks
 
-    def _calculate_tasks_times(self, tasks_times, tasks_must_be_time):
+    def _calculate_tasks_times(
+            self,
+            tasks_times: List[timedelta],
+            tasks_must_be_time: timedelta
+    ) -> List[timedelta]:
         """
         Calculates proportions of tasks by work time and adjusts work time
         to be tasks_must_be_time in total. Takes care of rounding.
-        :return:
+        :return: list of timedeltas that sum up to tasks_must_be_time
         """
         proportions = self._proportions(tasks_times)
         tasks_times = [tasks_must_be_time * p for p in proportions]
@@ -388,13 +413,21 @@ class TimeAdjuster:
         tasks_times[time_idx] += diff_after_rounding
         return tasks_times
 
-    def _override_tasks_work_time(self,tasks, tasks_times):
+    @staticmethod
+    def _apply_new_work_time(tasks: List[Event], tasks_times: List[timedelta]):
+        new_tasks = []
         for task, new_work_time in zip(tasks, tasks_times):
-            task.work_time = new_work_time
-        return tasks
+            new_tasks.append(Event(
+                work_time=new_work_time,
+                key=task.key,
+                title=task.title,
+                event_type=task.event_type
+            ))
+        return new_tasks
 
     @staticmethod
-    def _round_timedelta(td, period=timedelta(minutes=5)):
+    def _round_timedelta(td: timedelta,
+                         period=timedelta(minutes=5)) -> timedelta:
         """
         Rounds the given timedelta by the given timedelta period
         :param td: `timedelta` to round
@@ -497,6 +530,13 @@ def is_weekend(date):
     return date.weekday() > 4
 
 
+def handle_yolo_with_no_tasks(project) -> List[Event]:
+    return [Event(
+        key=f'working on project {project}',
+        work_time=timedelta(hours=2)  # whatever to adjust later
+    )]
+
+
 def main():
     args = parse_args()
 
@@ -527,8 +567,15 @@ def main():
         meetings = meetings_builder.get_meetings(config[MEETINGS])
         if args.additional_meeting:
             meetings.append(args.additional_meeting)
+    meetings = [event for event in meetings if event.work_time]
     tasks = getter.get_tasks()
     tasks = processor.process_jira_tasks(tasks)
+
+    if args.yolo:
+        all_tasks_time = sum([obj.work_time for obj in tasks], timedelta())
+        if all_tasks_time == timedelta(seconds=0):
+            tasks = handle_yolo_with_no_tasks(jira_config.project_abbr)
+
     tasks = adjuster.adjust_time(tasks, meetings)
 
     print_log(tasks, meetings)
@@ -536,11 +583,13 @@ def main():
     if args.yolo:
         print('Logging your work time to TT')
         tt_logger.post_log(tasks + meetings)
+        print('Logged time to TT')
     else:
         decision = input('\nProceed with logging to TT? [Y/n]')
-        if decision in ['', 'T', 't', 'Y', 'y']:
+        if decision in ['', 'T', 't', 'Y', 'y', 'Tak', 'tak', 'Yes', 'yes']:
             print('Logging your work time to TT')
             tt_logger.post_log(tasks + meetings)
+            print('Logged time to TT')
         elif decision in ['N', 'n', 'No', 'no']:
             print('Aborted')
         else:
