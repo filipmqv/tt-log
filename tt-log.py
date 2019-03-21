@@ -286,8 +286,7 @@ class JiraTaskProcessor:
         data = self._get_tasks_for_assignee(data, self._config.assignee_name)
         data = [self._process_task(obj, self._date_to_compare)
                 for obj in data if
-                self._has_mandatory_fields(obj) and
-                self._qualifies_for_processing(obj)]
+                self._has_mandatory_fields(obj)]
 
         data = self._remove_duplicates_and_errors(data)
         return data
@@ -316,16 +315,8 @@ class JiraTaskProcessor:
                obj[FIELDS][self._config.status_field] and \
                obj[FIELDS][self._config.status_field][NAME]
 
-    def _qualifies_for_processing(self, obj) -> bool:
-        return self._is_updated_on_date(
-            obj[CHANGELOG][HISTORIES], self._current_status(obj)) or \
-               self._is_in_progress(obj)
-
     def _current_status(self, issue):
         return issue[FIELDS][self._config.status_field][NAME]
-
-    def _is_in_progress(self, obj):
-        return self._current_status(obj) == self._config.start_work_status
 
     def _process_task(self, issue, date_to_compare):
         histories = issue[CHANGELOG][HISTORIES]
@@ -342,56 +333,53 @@ class JiraTaskProcessor:
             to_status=obj.to_status
         ) for obj in on_date]
 
-        timedaltas = [obj.duration for obj in limited_by_work_hours]
+        durations = [obj.duration for obj in limited_by_work_hours]
 
-        work_time = sum(timedaltas, timedelta())
+        work_time = sum(durations, timedelta())
 
-        if not work_time:
-            print('Discarded event: {} {}'.format(key, title))
         return Event(work_time=work_time, key=key, title=title,
                      event_type=EventType.TASK)
 
     def _intervals_on_date(self, histories, current_status):
         status_changes_list = self._status_changes_list(histories)
-        intervals = self._construct_work_intervals_new(status_changes_list,
-                                                       current_status)
-        intervals_work = [obj for obj in intervals if
-                          obj.from_status == self._config.start_work_status and obj.to_status in [
-                              self._config.stop_work_status_primary,
-                              self._config.stop_work_status_secondary,
-                              self._not_finished]]
-        on_date = [obj for obj in intervals_work if
+        work_intervals = self._work_intervals(status_changes_list,
+                                         current_status)
+        on_date = [obj for obj in work_intervals if
                    obj.is_between(self._date_to_compare)]
         return on_date
 
-    def _is_updated_on_date(self, histories, current_status) -> bool:
-        result = self._intervals_on_date(histories, current_status)
-        return bool(result)
+    def _work_intervals(self, changes: List[StatusChange],
+                        current_status: str) -> List[TimeInterval]:
+        """
+        Returns TimeIntervals of actual work - they start and finish with
+        proper statuses identifying start and stop work
+        """
+        if not changes:
+            return []
+        start_status = self._config.start_work_status
+        stop_statuses = [self._config.stop_work_status_primary,
+                         self._config.stop_work_status_secondary]
+        result = []
+        for start, stop in zip(changes, changes[1:]):
+            if start.to_status == start_status and \
+                    stop.to_status in stop_statuses:
+                result.append(TimeInterval(
+                    start.created, stop.created,
+                    start.to_status, stop.to_status))
+        last = changes[-1]
+        if current_status == start_status and last.to_status == start_status:
+            stop_timestamp = self._stop_work_timestamp if \
+                self._stop_work_timestamp > last.created else \
+                last.created + timedelta(minutes=10)
+            stop = StatusChange(stop_timestamp, self._not_finished)
+            result.append(
+                TimeInterval(last.created, stop.created,
+                             last.to_status, stop.to_status))
+        return result
 
-    def _construct_work_intervals_new(self, changes: List[StatusChange],
-                                      current_status):
-        res = []
-        for start in changes:
-            if start.to_status == self._config.start_work_status:
-                stops = [s for s in changes if s.created > start.created]
-                if stops:
-                    corresponding_stop = min(stops)
-                    res.append(TimeInterval(
-                        start.created, corresponding_stop.created,
-                        start.to_status, corresponding_stop.to_status))
-                elif current_status == self._config.start_work_status:
-                    stop_timestamp = self._stop_work_timestamp if \
-                        self._stop_work_timestamp > start.created else \
-                        start.created + timedelta(minutes=10)
-                    corresponding_stop = StatusChange(stop_timestamp,
-                                                      self._not_finished)
-                    res.append(
-                        TimeInterval(start.created, corresponding_stop.created,
-                                     start.to_status,
-                                     corresponding_stop.to_status))
-        return res
-
-    def _is_status_history(self, obj):
+    def _is_status_history(self, obj) -> bool:
+        """ Checks if object represents status change (not comment or other
+        field update) """
         return obj[ITEMS] and obj[ITEMS][0] and obj[ITEMS][0][
             FIELD] == self._config.status_field
 
