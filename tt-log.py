@@ -128,6 +128,30 @@ class Event:
         return " ".join(filter(None, [self.key, self.title]))
 
 
+@attr.dataclass(frozen=True)
+class TimeInterval:
+    start: datetime
+    stop: datetime
+    from_status: str
+    to_status: str
+
+    def is_between(self, timestamp: date) -> bool:
+        """
+        Checks if timestamp is between start and stop dates
+        """
+        return self.start.date() <= timestamp <= self.stop.date()
+
+    @property
+    def duration(self):
+        return self.stop - self.start
+
+
+@attr.dataclass(frozen=True)
+class StatusChange:
+    created: datetime
+    to_status: str
+
+
 @attr.dataclass
 class ConfigLoader:
     _config_file: str
@@ -256,8 +280,10 @@ class JiraTaskProcessor:
     _start_work_timestamp: datetime
     _stop_work_timestamp: datetime
 
+    _not_finished = 'NOT FINISHED YET'
+
     def process_jira_tasks(self, data):
-        data = self._get_tasks_for_assigne(data, self._config.assignee_name)
+        data = self._get_tasks_for_assignee(data, self._config.assignee_name)
         data = [self._process_task(obj, self._date_to_compare)
                 for obj in data if
                 self._has_mandatory_fields(obj) and
@@ -266,7 +292,18 @@ class JiraTaskProcessor:
         data = self._remove_duplicates_and_errors(data)
         return data
 
-    def _remove_duplicates_and_errors(self, events: List[Event]) -> List[Event]:
+    @staticmethod
+    def _get_tasks_for_assignee(data, assignee):
+        """
+        Ensures that only tasks for assignee will be processed
+        """
+        return [obj for obj in data['issues'] if
+                obj[FIELDS] and
+                obj[FIELDS][ASSIGNEE] and
+                obj[FIELDS][ASSIGNEE][NAME] == assignee]
+
+    @staticmethod
+    def _remove_duplicates_and_errors(events: List[Event]) -> List[Event]:
         """
         Removes duplicates and events with work_time == None
         """
@@ -280,99 +317,88 @@ class JiraTaskProcessor:
                obj[FIELDS][self._config.status_field][NAME]
 
     def _qualifies_for_processing(self, obj) -> bool:
-        return self._is_updated_on_date(obj[CHANGELOG][HISTORIES]) \
-               or self._is_in_progress(obj)
+        return self._is_updated_on_date(
+            obj[CHANGELOG][HISTORIES], self._current_status(obj)) or \
+               self._is_in_progress(obj)
+
+    def _current_status(self, issue):
+        return issue[FIELDS][self._config.status_field][NAME]
 
     def _is_in_progress(self, obj):
-        return obj[FIELDS][self._config.status_field][NAME] == \
-               self._config.start_work_status
+        return self._current_status(obj) == self._config.start_work_status
 
     def _process_task(self, issue, date_to_compare):
         histories = issue[CHANGELOG][HISTORIES]
         key = issue[KEY]
         title = issue[FIELDS][SUMMARY]
+        current_status = self._current_status(issue)
 
-        histories_to_primary_stop = self._histories_moved_to_status(
-            histories, self._config.stop_work_status_primary)
-        histories_to_secondary_stop = self._histories_moved_to_status(
-            histories, self._config.stop_work_status_secondary)
-        histories_to_start = self._histories_moved_to_status(
-            histories, self._config.start_work_status)
+        on_date = self._intervals_on_date(histories, current_status)
 
-        newest_start_work = self._get_newest_created_datetime(
-            histories_to_start)
-        newest_stop_work = self._get_newest_created_datetime(
-            histories_to_primary_stop) or \
-                           self._get_newest_created_datetime(
-                               histories_to_secondary_stop)
+        limited_by_work_hours = [TimeInterval(
+            start=obj.start if obj.start > self._start_work_timestamp else self._start_work_timestamp,
+            stop=obj.stop if obj.stop < self._stop_work_timestamp or self._stop_work_timestamp < obj.start else self._stop_work_timestamp,
+            from_status=obj.from_status,
+            to_status=obj.to_status
+        ) for obj in on_date]
 
-        work_time = None
-        if newest_start_work and \
-                newest_stop_work and \
-                newest_start_work.date() == date_to_compare and \
-                newest_stop_work.date() == date_to_compare:
-            work_time = newest_stop_work - newest_start_work
-        elif newest_start_work and newest_start_work.date() == date_to_compare:
-            work_time = self._stop_work_timestamp - newest_start_work
-        elif newest_stop_work and newest_stop_work.date() == date_to_compare:
-            work_time = newest_stop_work - self._start_work_timestamp
-        elif newest_start_work and \
-                newest_start_work.date() < date_to_compare and \
-                not newest_stop_work:
-            work_time = timedelta(hours=2)  # whatever to adjust later
-        elif newest_start_work and \
-                newest_start_work.date() < date_to_compare and \
-                newest_stop_work and \
-                newest_stop_work.date() > date_to_compare:
-            work_time = timedelta(hours=2)  # whatever to adjust later
-        else:
-            print('Discarded event: {} {} {}'.format(
-                key, newest_start_work, newest_stop_work))
+        timedaltas = [obj.duration for obj in limited_by_work_hours]
+
+        work_time = sum(timedaltas, timedelta())
+
+        if not work_time:
+            print('Discarded event: {} {}'.format(key, title))
         return Event(work_time=work_time, key=key, title=title,
                      event_type=EventType.TASK)
 
-    def _histories_moved_to_status(self, histories, status):
-        histories = [obj for obj in histories if
-                     obj[ITEMS] and
-                     obj[ITEMS][0] and
-                     obj[ITEMS][0][FIELD] == self._config.status_field and
-                     obj[ITEMS][0][TO_STRING] == status]
-        return histories
+    def _intervals_on_date(self, histories, current_status):
+        status_changes_list = self._status_changes_list(histories)
+        intervals = self._construct_work_intervals_new(status_changes_list,
+                                                       current_status)
+        intervals_work = [obj for obj in intervals if
+                          obj.from_status == self._config.start_work_status and obj.to_status in [
+                              self._config.stop_work_status_primary,
+                              self._config.stop_work_status_secondary,
+                              self._not_finished]]
+        on_date = [obj for obj in intervals_work if
+                   obj.is_between(self._date_to_compare)]
+        return on_date
 
-    @staticmethod
-    def _get_newest_created_datetime(histories):
-        if histories and histories[0] and histories[0][CREATED]:
-            return parser.parse(histories[0][CREATED])
-        return None
+    def _is_updated_on_date(self, histories, current_status) -> bool:
+        result = self._intervals_on_date(histories, current_status)
+        return bool(result)
 
-    def _is_on_date(self, created_timestamp):
-        return parser.parse(created_timestamp).date() == self._date_to_compare
+    def _construct_work_intervals_new(self, changes: List[StatusChange],
+                                      current_status):
+        res = []
+        for start in changes:
+            if start.to_status == self._config.start_work_status:
+                stops = [s for s in changes if s.created > start.created]
+                if stops:
+                    corresponding_stop = min(stops)
+                    res.append(TimeInterval(
+                        start.created, corresponding_stop.created,
+                        start.to_status, corresponding_stop.to_status))
+                elif current_status == self._config.start_work_status:
+                    stop_timestamp = self._stop_work_timestamp if \
+                        self._stop_work_timestamp > start.created else \
+                        start.created + timedelta(minutes=10)
+                    corresponding_stop = StatusChange(stop_timestamp,
+                                                      self._not_finished)
+                    res.append(
+                        TimeInterval(start.created, corresponding_stop.created,
+                                     start.to_status,
+                                     corresponding_stop.to_status))
+        return res
 
-    def _is_updated_on_date(self, histories) -> bool:
-        histories_to_primary_stop = self._histories_moved_to_status(
-            histories, self._config.stop_work_status_primary)
-        histories_to_secondary_stop = self._histories_moved_to_status(
-            histories, self._config.stop_work_status_secondary)
-        histories_to_start = self._histories_moved_to_status(
-            histories, self._config.start_work_status)
+    def _is_status_history(self, obj):
+        return obj[ITEMS] and obj[ITEMS][0] and obj[ITEMS][0][
+            FIELD] == self._config.status_field
 
-        histories = self._histories_on_date(histories_to_secondary_stop) or \
-                    self._histories_on_date(histories_to_primary_stop) or \
-                    self._histories_on_date(histories_to_start)
-        return bool(histories)
-
-    def _histories_on_date(self, histories):
-        return [obj for obj in histories if self._is_on_date(obj[CREATED])]
-
-    @staticmethod
-    def _get_tasks_for_assigne(data, assignee):
-        """
-        Ensures that only tasks for assignee will be processed
-        """
-        return [obj for obj in data['issues'] if
-                obj[FIELDS] and
-                obj[FIELDS][ASSIGNEE] and
-                obj[FIELDS][ASSIGNEE][NAME] == assignee]
+    def _status_changes_list(self, histories) -> List[StatusChange]:
+        return [StatusChange(created=parser.parse(obj[CREATED]),
+                             to_status=obj[ITEMS][0][TO_STRING])
+                for obj in reversed(histories) if self._is_status_history(obj)]
 
 
 class TimeAdjuster:
