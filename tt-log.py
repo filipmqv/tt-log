@@ -284,7 +284,7 @@ class JiraTaskProcessor:
 
     def process_jira_tasks(self, data):
         data = self._get_tasks_for_assignee(data, self._config.assignee_name)
-        data = [self._process_task(obj, self._date_to_compare)
+        data = [self._process_task(obj)
                 for obj in data if
                 self._has_mandatory_fields(obj)]
 
@@ -318,7 +318,7 @@ class JiraTaskProcessor:
     def _current_status(self, issue):
         return issue[FIELDS][self._config.status_field][NAME]
 
-    def _process_task(self, issue, date_to_compare):
+    def _process_task(self, issue):
         histories = issue[CHANGELOG][HISTORIES]
         key = issue[KEY]
         title = issue[FIELDS][SUMMARY]
@@ -327,8 +327,11 @@ class JiraTaskProcessor:
         on_date = self._intervals_on_date(histories, current_status)
 
         limited_by_work_hours = [TimeInterval(
-            start=obj.start if obj.start > self._start_work_timestamp else self._start_work_timestamp,
-            stop=obj.stop if obj.stop < self._stop_work_timestamp or self._stop_work_timestamp < obj.start else self._stop_work_timestamp,
+            start=obj.start if obj.start > self._start_work_timestamp else \
+                self._start_work_timestamp,
+            stop=obj.stop if obj.stop < self._stop_work_timestamp or \
+                             self._stop_work_timestamp < obj.start else \
+                self._stop_work_timestamp,
             from_status=obj.from_status,
             to_status=obj.to_status
         ) for obj in on_date]
@@ -340,10 +343,11 @@ class JiraTaskProcessor:
         return Event(work_time=work_time, key=key, title=title,
                      event_type=EventType.TASK)
 
-    def _intervals_on_date(self, histories, current_status):
+    def _intervals_on_date(self, histories,
+                           current_status: str) -> List[TimeInterval]:
         status_changes_list = self._status_changes_list(histories)
         work_intervals = self._work_intervals(status_changes_list,
-                                         current_status)
+                                              current_status)
         on_date = [obj for obj in work_intervals if
                    obj.is_between(self._date_to_compare)]
         return on_date
