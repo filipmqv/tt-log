@@ -484,7 +484,7 @@ class TeamTrackerLogger:
     _auth: str
     _when: date
 
-    TT_URL = 'http://localhost:8080'
+    TT_URL = 'https://teamtrack.venturedevs.com'
     LOG_ENDPOINT = TT_URL + '/api/project_logs/'
 
     def post_log(self, events: List[Event]):
@@ -503,7 +503,7 @@ class TeamTrackerLogger:
             "minutes": minutes,
             "when": self._when.isoformat(),
             "type": event_type,
-            "project": self._tt_project_id,
+            "project_id": self._tt_project_id,
         })
         return payload
 
@@ -515,7 +515,6 @@ class TeamTrackerLogger:
         return headers
 
     def _post_payload(self, payload):
-        return True  # todo send to team track
         r = requests.request(
             "POST",
             self.LOG_ENDPOINT,
