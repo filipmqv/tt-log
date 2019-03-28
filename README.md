@@ -12,7 +12,7 @@ Setup:
     * If you have weekly sprint (and events occuring every week) - set `"sprint"` field to `"weekly"` and write events on `"weekly_events"` list. There is one object per day - first for Monday, second for Tuesday etc.
     * If you have sprints that last 2 weeks - set `"sprint"` field to `"biweekly"` and write events on `"biweekly_events"` list. First 5 are for first week, other for second week. Set `"biweekly_start_date"` to be the date of Monday in first week. This date must be in the past!
   * TeamTracker:
-    * for `"auth"` replace `real_token` with token from TeamTracker. It will be available once the API will work.
+    * for `"auth"` replace `real_token` with token from TeamTracker. You can find it on your profile details page ("My Profile").
     * for `"tt_project_id"` set proper project ID from TeamTracker - it is available in URL when you enter your project details page.
   * Other:
     * change `"timezone"` if you work outside of Poland
